@@ -440,7 +440,7 @@ async function recoverLegacyAdminQuestions(){
   const legacyKeys=[
    "drivingQuizAdminQuestions","adminQuestions","admin_questions","questions",
    "drivingQuizQuestions","quizQuestions","customQuestions","savedQuestions",
-   "addedQuestions","remoteQuestions","oldQuestions","questionsBackup","quizBackup"
+   "addedQuestions","remoteQuestions","oldQuestions","questionsBackup","quizBackup","drivingQuizQuestionsBackup"
   ];
   legacyKeys.forEach(key=>{try{const raw=localStorage.getItem(key);if(raw){const parsed=JSON.parse(raw);walk(parsed)}}catch(e){}});
   // هەندێک وەشانی کۆن دەتوانێت backup ـەکەی لە window هەڵگرتبێت.
@@ -495,8 +495,13 @@ async function seedOldQuestions(){
 
 function saveQuestionsBackup(){
  try{
-  const data=questions.filter(x=>x&&x.q).map(x=>({id:x.id,q:x.q,a:Array.isArray(x.a)?x.a:[],correct:Number(x.correct)||0,imageUrl:x.imageUrl||""}));
-  localStorage.setItem("drivingQuizQuestionsBackup",JSON.stringify({savedAt:new Date().toISOString(),questions:data}));
+  // Backup ـی تەواوی پرسیارەکان لە مۆبایل؛ 1-85 + هەموو پرسیارە زیادکراوەکان.
+  const data=questions.filter(x=>x&&x.q).map(x=>({
+   id:x.id,q:x.q,a:Array.isArray(x.a)?x.a:[],correct:Number(x.correct)||0,imageUrl:x.imageUrl||""
+  }));
+  const payload={version:2,savedAt:new Date().toISOString(),questions:data};
+  localStorage.setItem("drivingQuizQuestionsBackup",JSON.stringify(payload));
+  // ئەمەش بۆ وەشانی کۆن و recovery ـی پرسیارەکانی Admin هەڵدەگیرێت.
   localStorage.setItem("drivingQuizAdminQuestions",JSON.stringify(data.filter(x=>Number(x.id)>85)));
  }catch(e){console.warn("Backup save failed",e)}
 }
