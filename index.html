@@ -268,8 +268,14 @@ function createQuestionNumbers(){$("questionNumbers").innerHTML="";sessionQuesti
 function showQuestion(){
  clearInterval(timerInterval);const q=sessionQuestions[currentQuestion];
  document.querySelectorAll(".qnum").forEach(x=>x.classList.remove("current"));$("qnum-"+currentQuestion).classList.add("current");
- $("questionCounter").textContent=`پرسیار ${currentQuestion+1} لە ${sessionQuestions.length}`;$("progressBar").style.width=`${(currentQuestion/sessionQuestions.length)*100}%`;$("questionText").textContent=q.q;$("questionImage").innerHTML="";
- if(q.imageUrl){const im=document.createElement("img");im.src=q.imageUrl;im.alt="";$("questionImage").appendChild(im);$("questionImage").classList.remove("hidden")}else $("questionImage").classList.add("hidden");
+ $("questionCounter").textContent=`پرسیار ${currentQuestion+1} لە ${sessionQuestions.length}`;$("progressBar").style.width=`${(currentQuestion/sessionQuestions.length)*100}%`;$("questionText").textContent=q.q;
+ const imageBox=$("questionImage");imageBox.innerHTML="";
+ const imageSrc=q.imageUrl||"";
+ if(imageSrc){
+  const im=document.createElement("img");im.src=imageSrc;im.alt="وێنەی پرسیار";im.loading="eager";
+  im.onerror=()=>{imageBox.innerHTML='<div class="small">وێنەکە نەدۆزرایەوە.</div>'};
+  imageBox.appendChild(im);imageBox.classList.remove("hidden");
+ }else imageBox.classList.add("hidden");
  $("answers").innerHTML="";
  shuffle(q.a.map((text,index)=>({text,index}))).forEach(c=>{const b=document.createElement("button");b.className="answer-btn";b.type="button";b.textContent=c.text;b.onclick=()=>answerQuestion(c.index,b);$("answers").appendChild(b)});
  startTimer()
@@ -506,6 +512,16 @@ function saveQuestionsBackup(){
  }catch(e){console.warn("Backup save failed",e)}
 }
 
+function fileToDataURL(file){
+ return new Promise((resolve,reject)=>{
+  if(!file)return resolve("");
+  const reader=new FileReader();
+  reader.onload=()=>resolve(String(reader.result||""));
+  reader.onerror=()=>reject(reader.error||new Error("نەتوانرا وێنەکە بخوێندرێتەوە"));
+  reader.readAsDataURL(file);
+ });
+}
+
 async function saveQuestion(){
  if(!adminLoggedIn)return;
  const q=$("adminQuestion").value.trim(),a=[$("adminA").value.trim(),$("adminB").value.trim(),$("adminC").value.trim()],correct=Number($("adminCorrect").value),file=$("adminImage").files[0];
@@ -515,19 +531,22 @@ async function saveQuestion(){
  try{
   const old=questions.find(x=>String(x.id)===String(editing));
   let imageUrl=old?.imageUrl||"";
+  let imageSavedToStorage=false;
   if(file){
    const ext=(file.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"")||"jpg";
-   const path=Date.now()+"-"+Math.random().toString(36).slice(2)+"."+ext;
-   const up=await sb.storage.from("question-images").upload(path,file,{upsert:false});
-   if(up.error){
-    console.warn("Image upload failed:",up.error.message);
-    status("وێنەکە لە Storage سەیڤ نەکرا، بەڵام پرسیارەکە خەزن دەکرێت.",false);
-    imageUrl="";
+   const path="questions/"+Date.now()+"-"+Math.random().toString(36).slice(2)+"."+ext;
+   const up=await sb.storage.from("question-images").upload(path,file,{upsert:false,contentType:file.type||undefined});
+   if(!up.error){
+    const pub=sb.storage.from("question-images").getPublicUrl(path);
+    imageUrl=pub?.data?.publicUrl||"";
+    imageSavedToStorage=!!imageUrl;
    }else{
-    imageUrl=sb.storage.from("question-images").getPublicUrl(path).data.publicUrl;
+    console.warn("Image upload failed:",up.error.message);
+    // Backup image directly in the database too, so the question still shows if Storage is missing.
+    imageUrl=await fileToDataURL(file);
    }
   }
-  // Match the real Supabase questions schema: id, question, options, correct_answer, image_url, created_at
+  // Real schema: id, question, options, correct_answer, image_url, created_at.
   const row={question:q,options:a,correct_answer:correct,image_url:imageUrl||null};
   let res;
   if(editing)res=await sb.from("questions").update(row).eq("id",editing);
@@ -536,7 +555,10 @@ async function saveQuestion(){
   const id=editing||row.id,obj={id,q,a,correct,imageUrl},idx=questions.findIndex(x=>String(x.id)===String(id));
   if(idx>=0)questions[idx]=obj;else questions.push(obj);
   saveQuestionsBackup();
-  resetForm();renderAdmin();status(editing?"پرسیارەکە لە Supabase و Backup نوێکرایەوە.":"پرسیارەکە لە Supabase و Backup خەزن کرا.",true);
+  resetForm();renderAdmin();
+  if(file&&!imageSavedToStorage)status("پرسیارەکە خەزن کرا؛ Bucket ـی Storage نەدۆزرایەوە، بۆیە وێنەکە وەک Backup لەگەڵ پرسیارەکە خەزن کرا.",true);
+  else if(file)status("پرسیار و وێنەکە لە Supabase Storage خەزن کران. لە تاقیکردنەوەشدا وێنەکە دەردەکەوێت.",true);
+  else status(editing?"پرسیارەکە لە Supabase و Backup نوێکرایەوە.":"پرسیارەکە لە Supabase و Backup خەزن کرا.",true);
  }catch(e){status("هەڵە: "+(e.message||e),false)}finally{$("adminAddBtn").disabled=false}
 }
 function editQuestion(id){
