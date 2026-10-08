@@ -493,6 +493,14 @@ async function seedOldQuestions(){
  status(`${missing.length} پرسیاری نوێ بۆ Supabase زیاد کرا.`,true);return true
 }
 
+function saveQuestionsBackup(){
+ try{
+  const data=questions.filter(x=>x&&x.q).map(x=>({id:x.id,q:x.q,a:Array.isArray(x.a)?x.a:[],correct:Number(x.correct)||0,imageUrl:x.imageUrl||""}));
+  localStorage.setItem("drivingQuizQuestionsBackup",JSON.stringify({savedAt:new Date().toISOString(),questions:data}));
+  localStorage.setItem("drivingQuizAdminQuestions",JSON.stringify(data.filter(x=>Number(x.id)>85)));
+ }catch(e){console.warn("Backup save failed",e)}
+}
+
 async function saveQuestion(){
  if(!adminLoggedIn)return;
  const q=$("adminQuestion").value.trim(),a=[$("adminA").value.trim(),$("adminB").value.trim(),$("adminC").value.trim()],correct=Number($("adminCorrect").value),file=$("adminImage").files[0];
@@ -500,33 +508,30 @@ async function saveQuestion(){
  if(!await initSB()){status("Supabase ڕێک نەخراوە.",false);return}
  $("adminAddBtn").disabled=true;const editing=editingQuestionId;
  try{
-  const old=questions.find(x=>String(x.id)===String(editing));let imageUrl=old?.imageUrl||"";
+  const old=questions.find(x=>String(x.id)===String(editing));
+  let imageUrl=old?.imageUrl||"";
   if(file){
    const ext=(file.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"")||"jpg";
    const path=Date.now()+"-"+Math.random().toString(36).slice(2)+"."+ext;
-   const up=await sb.storage.from("question-images").upload(path,file,{upsert:false});if(up.error)throw up.error;
-   imageUrl=sb.storage.from("question-images").getPublicUrl(path).data.publicUrl
+   const up=await sb.storage.from("question-images").upload(path,file,{upsert:false});
+   if(up.error){
+    console.warn("Image upload failed:",up.error.message);
+    status("وێنەکە لە Storage سەیڤ نەکرا، بەڵام پرسیارەکە خەزن دەکرێت.",false);
+    imageUrl="";
+   }else{
+    imageUrl=sb.storage.from("question-images").getPublicUrl(path).data.publicUrl;
+   }
   }
-  let row={question:q,options:a,correct_answer:correct};
-  if(imageUrl)row.image_url=imageUrl;
-  let res;if(editing)res=await sb.from("questions").update(row).eq("id",editing);else{row.id=Date.now();res=await sb.from("questions").insert(row)}
-  // ئەگەر image_url لە schema ـی Supabase نەبوو، دووبارە بە schema ـی سادە هەوڵ بدە.
-  if(res.error && /image_url|column.*schema cache/i.test(res.error.message||"")){
-   row={question:q,options:a,correct_answer:correct};
-   if(editing)res=await sb.from("questions").update(row).eq("id",editing);else{row.id=Date.now();res=await sb.from("questions").insert(row)}
-  }
+  // Match the real Supabase questions schema: id, question, options, correct_answer, image_url, created_at
+  const row={question:q,options:a,correct_answer:correct,image_url:imageUrl||null};
+  let res;
+  if(editing)res=await sb.from("questions").update(row).eq("id",editing);
+  else{row.id=Date.now();res=await sb.from("questions").insert(row)}
   if(res.error)throw res.error;
   const id=editing||row.id,obj={id,q,a,correct,imageUrl},idx=questions.findIndex(x=>String(x.id)===String(id));
   if(idx>=0)questions[idx]=obj;else questions.push(obj);
-  // backup بۆ ئەوەی ئەگەر SELECT/RLS ـی Supabase کێشەی هەبوو، پرسیاری نوێ لەدەست نەچێت.
-  try{
-   const cached=JSON.parse(localStorage.getItem("drivingQuizAdminQuestions")||"[]");
-   const ci=cached.findIndex(x=>String(x.id)===String(id));
-   if(ci>=0)cached[ci]=obj;else cached.push(obj);
-   localStorage.setItem("drivingQuizAdminQuestions",JSON.stringify(cached));
-  }catch(e){}
-  remoteQuestionsLoaded=false;
-  resetForm();renderAdmin();status(editing?"پرسیارەکە نوێکرایەوە.":"پرسیارەکە زیاد کرا.",true)
+  saveQuestionsBackup();
+  resetForm();renderAdmin();status(editing?"پرسیارەکە لە Supabase و Backup نوێکرایەوە.":"پرسیارەکە لە Supabase و Backup خەزن کرا.",true);
  }catch(e){status("هەڵە: "+(e.message||e),false)}finally{$("adminAddBtn").disabled=false}
 }
 function editQuestion(id){
@@ -536,7 +541,7 @@ function editQuestion(id){
 async function deleteQuestion(id){
  if(!adminLoggedIn||!await initSB())return;if(!confirm("دڵنیایت لە سڕینەوەی ئەم پرسیارە؟"))return;
  const r=await sb.from("questions").delete().eq("id",id);if(r.error){status("سڕینەوە سەرکەوتوو نەبوو: "+r.error.message,false);return}
- questions=questions.filter(q=>String(q.id)!==String(id));remoteQuestionsLoaded=true;renderAdmin();status("پرسیارەکە بە سەرکەوتوویی سڕایەوە. لە Refresh ـیشدا ناگەڕێتەوە.",true)
+ questions=questions.filter(q=>String(q.id)!==String(id));remoteQuestionsLoaded=true;saveQuestionsBackup();renderAdmin();status("پرسیارەکە بە سەرکەوتوویی سڕایەوە. لە Refresh ـیشدا ناگەڕێتەوە.",true)
 }
 function renderAdmin(){
  const box=$("adminList"),list=questions.filter(q=>q&&Number(q.id)>0);
