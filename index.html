@@ -401,7 +401,7 @@ async function seedOldQuestions(){
  const existingRes=await sb.from("questions").select("id");
  if(existingRes.error){status("نەتوانرا پرسیارەکانی Supabase بخوێندرێنەوە: "+existingRes.error.message,false);return false}
  const existingIds=new Set((existingRes.data||[]).map(x=>String(x.id)));
- const missing=LOCAL_QUESTIONS.filter(q=>!existingIds.has(String(q.id))).map(q=>({id:Number(q.id),question:q.q,options:q.a,correct:Number(q.correct)}));
+ const missing=LOCAL_QUESTIONS.filter(q=>!existingIds.has(String(q.id))).map(q=>({id:Number(q.id),question:q.q,options:q.a,correct_answer:Number(q.correct)}));
  if(!missing.length){status("هەموو پرسیارە ناوخۆییەکان پێشتر لە Supabase هەن.",true);return true}
  const ins=await sb.from("questions").insert(missing);
  if(ins.error){status("زیادکردنی پرسیارە کۆنەکان سەرکەوتوو نەبوو: "+ins.error.message,false);return false}
@@ -422,12 +422,12 @@ async function saveQuestion(){
    const up=await sb.storage.from("question-images").upload(path,file,{upsert:false});if(up.error)throw up.error;
    imageUrl=sb.storage.from("question-images").getPublicUrl(path).data.publicUrl
   }
-  let row={question:q,options:a,correct:correct};
+  let row={question:q,options:a,correct_answer:correct};
   if(imageUrl)row.image_url=imageUrl;
   let res;if(editing)res=await sb.from("questions").update(row).eq("id",editing);else{row.id=Date.now();res=await sb.from("questions").insert(row)}
   // ئەگەر image_url لە schema ـی Supabase نەبوو، دووبارە بە schema ـی سادە هەوڵ بدە.
   if(res.error && /image_url|column.*schema cache/i.test(res.error.message||"")){
-   row={question:q,options:a,correct:correct};
+   row={question:q,options:a,correct_answer:correct};
    if(editing)res=await sb.from("questions").update(row).eq("id",editing);else{row.id=Date.now();res=await sb.from("questions").insert(row)}
   }
   if(res.error)throw res.error;
