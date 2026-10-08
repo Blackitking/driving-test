@@ -400,6 +400,9 @@ async function loadRemote(){
 
 async function recoverLegacyAdminQuestions(){
  if(!adminLoggedIn)return 0;
+ // پشکنینی backup ـەکانی پێشووی Admin Panel لە localStorage بە چەند key ـێکی کۆن
+ // و هەروەها data ـی nested دەکەین، بەبێ سڕینەوەی هیچ شتێک.
+
  const found=[];
  const seen=new Set();
  const looksLikeQuestion=x=>x&&typeof x==='object' && (
@@ -433,6 +436,15 @@ async function recoverLegacyAdminQuestions(){
   });
  };
  try{
+  // هەموو key ـە باوەکان کە وەشانی کۆنی سایت دەتوانێت بەکاری هێنابێت.
+  const legacyKeys=[
+   "drivingQuizAdminQuestions","adminQuestions","admin_questions","questions",
+   "drivingQuizQuestions","quizQuestions","customQuestions","savedQuestions",
+   "addedQuestions","remoteQuestions","oldQuestions","questionsBackup","quizBackup"
+  ];
+  legacyKeys.forEach(key=>{try{const raw=localStorage.getItem(key);if(raw){const parsed=JSON.parse(raw);walk(parsed)}}catch(e){}});
+  // هەندێک وەشانی کۆن دەتوانێت backup ـەکەی لە window هەڵگرتبێت.
+  try{walk(window.__drivingQuizBackup);walk(window.__quizBackup);walk(window.__adminQuestions);walk(window.questionsBackup)}catch(e){}
   for(let i=0;i<localStorage.length;i++){
    const key=localStorage.key(i);
    if(!key)continue;
