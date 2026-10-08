@@ -136,6 +136,7 @@ input:focus{border-color:#2563eb}
 <input id="adminImage" type="file" accept="image/*">
 <div id="adminImagePreview" style="display:none;text-align:center;margin-top:12px"><img id="adminPreviewImg" style="max-width:100%;max-height:220px;border-radius:14px;object-fit:contain"></div>
 <button id="adminAddBtn" class="primary-btn" type="button">➕ زیادکردنی پرسیار</button>
+<button id="recoverOldBtn" class="primary-btn secondary-btn" type="button">♻️ گەڕاندنەوەی پرسیارە کۆنەکان</button>
 <button id="adminCancelEditBtn" class="primary-btn secondary-btn" style="display:none" type="button">❌ هەڵوەشاندنەوەی دەستکاری</button>
 <div id="adminStatus" class="admin-status"></div><div id="adminList" class="admin-list"></div>
 <button id="adminLogoutBtn" class="primary-btn secondary-btn" type="button">دەرچوون لە ئەدمین</button>
@@ -330,6 +331,7 @@ function openAdmin(e){if(e)e.preventDefault();showOnly("adminLoginScreen");$("ad
 async function loginAdmin(){
  if($("adminCode").value.trim()!==ADMIN_CODE){$("adminLoginError").style.display="block";return}
  adminLoggedIn=true;showOnly("adminPanel");siteNotifications=[];renderNotifications();await connectNotifications();
+ await recoverLegacyAdminQuestions();
  await seedOldQuestions();remoteQuestionsLoaded=false;await loadRemote();renderAdmin()
 }
 function normalizeOptions(x){
@@ -394,6 +396,77 @@ async function loadRemote(){
  console.log("کۆی گشتی پرسیارەکان:",questions.length,"| ناوخۆیی:",LOCAL_QUESTIONS.length,"| Supabase:",remote.length,"| backup:",cachedAdmin.length);
  remoteQuestionsLoaded=true;
  return true
+}
+
+async function recoverLegacyAdminQuestions(){
+ if(!adminLoggedIn)return 0;
+ const found=[];
+ const seen=new Set();
+ const looksLikeQuestion=x=>x&&typeof x==='object' && (
+   (typeof x.q==='string' && Array.isArray(x.a)) ||
+   (typeof x.question==='string' && (Array.isArray(x.options) || typeof x.options==='string'))
+ );
+ const addCandidate=x=>{
+  if(!looksLikeQuestion(x))return;
+  let a=x.a??x.options;
+  if(typeof a==='string'){try{a=JSON.parse(a)}catch(e){a=null}}
+  if(!Array.isArray(a)||a.length<3)return;
+  const q=String(x.q??x.question??'').trim();
+  if(!q)return;
+  const correct=Number(x.correct_answer??x.correct??x.answer??0);
+  const key=q+'|'+a.map(v=>String(v)).join('|');
+  if(seen.has(key))return;
+  seen.add(key);
+  found.push({
+   id:(x.id!==undefined&&x.id!==null&&String(x.id)!=='')?x.id:(Date.now()+found.length+Math.floor(Math.random()*1000)),
+   q,a:a.map(v=>String(v)),correct:Number.isFinite(correct)?correct:0,
+   imageUrl:String(x.imageUrl??x.image_url??x.image??'')
+  });
+ };
+ const walk=value=>{
+  if(Array.isArray(value)){value.forEach(walk);return}
+  if(!value||typeof value!=='object')return;
+  if(looksLikeQuestion(value))addCandidate(value);
+  Object.keys(value).forEach(k=>{
+   const v=value[k];
+   if((Array.isArray(v)||typeof v==='object')&&k!=='parentNode')walk(v);
+  });
+ };
+ try{
+  for(let i=0;i<localStorage.length;i++){
+   const key=localStorage.key(i);
+   if(!key)continue;
+   try{
+    const raw=localStorage.getItem(key);
+    if(!raw||raw.length>2000000)continue;
+    const parsed=JSON.parse(raw);
+    walk(parsed);
+   }catch(e){}
+  }
+ }catch(e){console.log('Legacy localStorage scan failed:',e)}
+ if(!found.length){status('هیچ backup ـێکی پرسیاری کۆن لە مۆبایلەکە نەدۆزرایەوە.',false);return 0}
+ const existingText=new Set(questions.map(q=>String(q.q||'').trim()+'|'+(q.a||[]).map(v=>String(v)).join('|')));
+ const recover=found.filter(q=>!existingText.has(q.q+'|'+q.a.map(v=>String(v)).join('|')));
+ if(!recover.length){status('پرسیارە کۆنە backup ـەکان پێشتر لە لیستەکە هەن.',true);return 0}
+ try{
+  const cached=JSON.parse(localStorage.getItem('drivingQuizAdminQuestions')||'[]');
+  const cacheArr=Array.isArray(cached)?cached:[];
+  const cacheKeys=new Set(cacheArr.map(q=>String(q.q||'').trim()+'|'+(q.a||[]).map(v=>String(v)).join('|')));
+  recover.forEach(q=>{if(!cacheKeys.has(q.q+'|'+q.a.join('|'))){cacheArr.push(q);cacheKeys.add(q.q+'|'+q.a.join('|'))}});
+  localStorage.setItem('drivingQuizAdminQuestions',JSON.stringify(cacheArr));
+ }catch(e){console.log('Legacy backup cache failed:',e)}
+ if(await initSB()){
+  const rows=recover.map(q=>({id:Number(q.id),question:q.q,options:q.a,correct_answer:Number(q.correct),...(q.imageUrl?{image_url:q.imageUrl}:{})}));
+  const ins=await sb.from('questions').insert(rows);
+  if(ins.error){
+   console.log('Legacy recovery insert:',ins.error.message);
+   status(`${recover.length} پرسیاری کۆن دۆزرایەوە و لە backup ـی مۆبایل پارێزرا؛ ناردنی Supabase سەرکەوتوو نەبوو.`,false);
+  }else{
+   status(`${recover.length} پرسیاری کۆن گەڕێنرایەوە و خەزن کران.`,true);
+  }
+ }
+ recover.forEach(q=>questions.push(q));
+ return recover.length;
 }
 
 async function seedOldQuestions(){
@@ -475,6 +548,7 @@ $("adminEntry").addEventListener("click",openAdmin);
 $("adminLoginBtn").addEventListener("click",loginAdmin);
 $("adminBackBtn").addEventListener("click",()=>showOnly("welcomeScreen"));
 $("adminAddBtn").addEventListener("click",saveQuestion);
+$("recoverOldBtn").addEventListener("click",async()=>{await recoverLegacyAdminQuestions();remoteQuestionsLoaded=false;await loadRemote();renderAdmin()});
 $("adminCancelEditBtn").addEventListener("click",resetForm);
 $("adminLogoutBtn").addEventListener("click",logoutAdmin);
 $("accessCode").addEventListener("keydown",e=>{if(e.key==="Enter")checkAccessCode()});
