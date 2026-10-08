@@ -151,6 +151,7 @@ const $=id=>document.getElementById(id);
    ========================= */
 const SUPABASE_URL="https://wpjqvpcqaufrpstnziad.supabase.co";
 const SUPABASE_ANON_KEY="sb_publishable_9ALxJWahJqUFvtMXR7-5TA_XHBIF6ZK";
+// Fixed: use the browser-safe publishable key and never block the quiz if Supabase fails.
 const ACCESS_CODE="2035";
 const ADMIN_CODE="5624";
 
@@ -256,8 +257,8 @@ function checkAccessCode(){if($("accessCode").value.trim()===ACCESS_CODE){showOn
 
 async function startQuiz(){
  userName=$("fullName").value.trim();
- if(!userName){$("fullName").focus();return}
- try{await loadRemote()}catch(e){console.log(e)}
+ if(!userName){$("fullName").focus();return;}
+ try{await loadRemote()}catch(e){console.log("Remote load skipped:",e)}
  sessionQuestions=getSessionQuestions();
  if(!sessionQuestions.length){alert("هیچ پرسیارێک بەردەست نییە.");return}
  currentQuestion=0;scoreCorrect=0;wrongAnswers=[];showOnly("quizScreen");createQuestionNumbers();showQuestion()
@@ -341,10 +342,17 @@ function normalizeOptions(x){
 async function loadRemote(){
  if(remoteQuestionsLoaded)return true;
  questions=LOCAL_QUESTIONS.map(q=>({...q,a:Array.isArray(q.a)?[...q.a]:[]}));
- if(!await initSB()){console.log("Supabase بەردەست نییە، پرسیارە ناوخۆییەکان بەکار دەهێنرێن.");remoteQuestionsLoaded=true;return false}
+ // پرسیارە زیادکراوەکان لە هەمان مۆبایل، وەک backup، لە localStorage هەڵدەگیرێن.
+ try{
+  const cached=JSON.parse(localStorage.getItem("drivingQuizAdminQuestions")||"[]");
+  if(Array.isArray(cached)){
+   cached.forEach(q=>{if(q&&q.id&&q.q&&Array.isArray(q.a)&&q.a.length>=3)questions.push({...q,correct:Number(q.correct)||0})})
+  }
+ }catch(e){}
+ if(!await initSB()){console.log("Supabase بەردەست نییە، پرسیارە ناوخۆییەکان بەکار دەهێنرێن.");remoteQuestionsLoaded=false;return false}
  const r=await sb.from("questions").select("*");
- if(r.error){console.log("Supabase error:",r.error.message);remoteQuestionsLoaded=true;return false}
- const remote=(r.data||[]).map(x=>({id:x.id,q:x.question||"",a:normalizeOptions(x),correct:Number(x.correct_answer??x.correct??0),imageUrl:x.image_url||""}));
+ if(r.error){console.log("Supabase error:",r.error.message);remoteQuestionsLoaded=false;return false}
+ const remote=(r.data||[]).map(x=>({id:x.id,q:String(x.question||x.q||""),a:normalizeOptions(x),correct:Number(x.correct_answer??x.correct??0),imageUrl:x.image_url||x.imageUrl||""})).filter(x=>x.q&&Array.isArray(x.a)&&x.a.length>=3);
  const merged=new Map();
  LOCAL_QUESTIONS.forEach(q=>merged.set(String(q.id),{...q,a:Array.isArray(q.a)?[...q.a]:[]}));
  remote.forEach(q=>{
@@ -352,7 +360,11 @@ async function loadRemote(){
   if(merged.has(key)){const old=merged.get(key);merged.set(key,{...old,...q,q:q.q||old.q,a:Array.isArray(q.a)&&q.a.length?q.a:old.a,correct:Number.isFinite(q.correct)?q.correct:old.correct,imageUrl:q.imageUrl||old.imageUrl||""})}
   else merged.set(key,q)
  });
- questions=Array.from(merged.values());console.log("کۆی گشتی پرسیارەکان:",questions.length,"| ناوخۆیی:",LOCAL_QUESTIONS.length,"| Supabase:",remote.length);remoteQuestionsLoaded=true;return true
+ // cache ـەکەش لەگەڵ داتای Supabase یەکبخە.
+ questions=Array.from(merged.values());
+ try{localStorage.setItem("drivingQuizAdminQuestions",JSON.stringify(remote.filter(q=>Number(q.id)>1000000000000)))}catch(e){}
+ console.log("کۆی گشتی پرسیارەکان:",questions.length,"| ناوخۆیی:",LOCAL_QUESTIONS.length,"| Supabase:",remote.length);
+ remoteQuestionsLoaded=true;return true
 }
 
 async function seedOldQuestions(){
@@ -385,7 +397,16 @@ async function saveQuestion(){
   let res;if(editing)res=await sb.from("questions").update(row).eq("id",editing);else{row.id=Date.now();res=await sb.from("questions").insert(row)}
   if(res.error)throw res.error;
   const id=editing||row.id,obj={id,q,a,correct,imageUrl},idx=questions.findIndex(x=>String(x.id)===String(id));
-  if(idx>=0)questions[idx]=obj;else questions.push(obj);resetForm();renderAdmin();status(editing?"پرسیارەکە نوێکرایەوە.":"پرسیارەکە زیاد کرا.",true)
+  if(idx>=0)questions[idx]=obj;else questions.push(obj);
+  // backup بۆ ئەوەی ئەگەر SELECT/RLS ـی Supabase کێشەی هەبوو، پرسیاری نوێ لەدەست نەچێت.
+  try{
+   const cached=JSON.parse(localStorage.getItem("drivingQuizAdminQuestions")||"[]");
+   const ci=cached.findIndex(x=>String(x.id)===String(id));
+   if(ci>=0)cached[ci]=obj;else cached.push(obj);
+   localStorage.setItem("drivingQuizAdminQuestions",JSON.stringify(cached));
+  }catch(e){}
+  remoteQuestionsLoaded=false;
+  resetForm();renderAdmin();status(editing?"پرسیارەکە نوێکرایەوە.":"پرسیارەکە زیاد کرا.",true)
  }catch(e){status("هەڵە: "+(e.message||e),false)}finally{$("adminAddBtn").disabled=false}
 }
 function editQuestion(id){
