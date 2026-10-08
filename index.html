@@ -342,29 +342,58 @@ function normalizeOptions(x){
 async function loadRemote(){
  if(remoteQuestionsLoaded)return true;
  questions=LOCAL_QUESTIONS.map(q=>({...q,a:Array.isArray(q.a)?[...q.a]:[]}));
- // پرسیارە زیادکراوەکان لە هەمان مۆبایل، وەک backup، لە localStorage هەڵدەگیرێن.
+ // هەموو backup ـەکانی پرسیارەکانی Admin لە localStorage پارێزراون؛ هیچ کات overwrite ناکرێن بە []
+ let cachedAdmin=[];
  try{
   const cached=JSON.parse(localStorage.getItem("drivingQuizAdminQuestions")||"[]");
   if(Array.isArray(cached)){
-   cached.forEach(q=>{if(q&&q.id&&q.q&&Array.isArray(q.a)&&q.a.length>=3)questions.push({...q,correct:Number(q.correct)||0})})
+   cachedAdmin=cached.filter(q=>q&&q.id&&q.q&&Array.isArray(q.a)&&q.a.length>=3).map(q=>({...q,correct:Number(q.correct)||0}));
+   cachedAdmin.forEach(q=>questions.push(q));
   }
- }catch(e){}
- if(!await initSB()){console.log("Supabase بەردەست نییە، پرسیارە ناوخۆییەکان بەکار دەهێنرێن.");remoteQuestionsLoaded=false;return false}
+ }catch(e){console.log("localStorage backup error:",e)}
+ if(!await initSB()){
+  remoteQuestionsLoaded=false;
+  return false
+ }
  const r=await sb.from("questions").select("*");
- if(r.error){console.log("Supabase error:",r.error.message);remoteQuestionsLoaded=false;return false}
- const remote=(r.data||[]).map(x=>({id:x.id,q:String(x.question||x.q||""),a:normalizeOptions(x),correct:Number(x.correct_answer??x.correct??0),imageUrl:x.image_url||x.imageUrl||""})).filter(x=>x.q&&Array.isArray(x.a)&&x.a.length>=3);
+ if(r.error){
+  console.log("Supabase error:",r.error.message);
+  remoteQuestionsLoaded=false;
+  return false
+ }
+ const remote=(r.data||[]).map(x=>({
+  id:x.id,
+  q:String(x.question||x.q||""),
+  a:normalizeOptions(x),
+  correct:Number(x.correct_answer??x.correct??0),
+  imageUrl:x.image_url||x.imageUrl||""
+ })).filter(x=>x.q&&Array.isArray(x.a)&&x.a.length>=3);
  const merged=new Map();
  LOCAL_QUESTIONS.forEach(q=>merged.set(String(q.id),{...q,a:Array.isArray(q.a)?[...q.a]:[]}));
+ cachedAdmin.forEach(q=>merged.set(String(q.id),q));
  remote.forEach(q=>{
   const key=String(q.id);
-  if(merged.has(key)){const old=merged.get(key);merged.set(key,{...old,...q,q:q.q||old.q,a:Array.isArray(q.a)&&q.a.length?q.a:old.a,correct:Number.isFinite(q.correct)?q.correct:old.correct,imageUrl:q.imageUrl||old.imageUrl||""})}
-  else merged.set(key,q)
+  const old=merged.get(key);
+  merged.set(key,{
+   ...(old||{}),
+   ...q,
+   q:q.q||old?.q||"",
+   a:Array.isArray(q.a)&&q.a.length?q.a:(old?.a||[]),
+   correct:Number.isFinite(q.correct)?q.correct:(old?.correct??0),
+   imageUrl:q.imageUrl||old?.imageUrl||""
+  });
  });
- // cache ـەکەش لەگەڵ داتای Supabase یەکبخە.
- questions=Array.from(merged.values());
- try{localStorage.setItem("drivingQuizAdminQuestions",JSON.stringify(remote.filter(q=>Number(q.id)>1000000000000)))}catch(e){}
- console.log("کۆی گشتی پرسیارەکان:",questions.length,"| ناوخۆیی:",LOCAL_QUESTIONS.length,"| Supabase:",remote.length);
- remoteQuestionsLoaded=true;return true
+ questions=Array.from(merged.values()).filter(q=>q&&q.q&&Array.isArray(q.a)&&q.a.length>=3);
+ // تەنها backup ـەکە زیاد دەکەین؛ هیچ کات بە remote=[] overwrite ناکەین.
+ try{
+  const keep=new Map();
+  cachedAdmin.forEach(q=>keep.set(String(q.id),q));
+  remote.filter(q=>Number(q.id)>1000000000000).forEach(q=>keep.set(String(q.id),q));
+  localStorage.setItem("drivingQuizAdminQuestions",JSON.stringify(Array.from(keep.values())));
+ }catch(e){}
+ console.log("کۆی گشتی پرسیارەکان:",questions.length,"| ناوخۆیی:",LOCAL_QUESTIONS.length,"| Supabase:",remote.length,"| backup:",cachedAdmin.length);
+ remoteQuestionsLoaded=true;
+ return true
 }
 
 async function seedOldQuestions(){
