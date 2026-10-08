@@ -372,7 +372,7 @@ async function seedOldQuestions(){
  const existingRes=await sb.from("questions").select("id");
  if(existingRes.error){status("نەتوانرا پرسیارەکانی Supabase بخوێندرێنەوە: "+existingRes.error.message,false);return false}
  const existingIds=new Set((existingRes.data||[]).map(x=>String(x.id)));
- const missing=LOCAL_QUESTIONS.filter(q=>!existingIds.has(String(q.id))).map(q=>({id:Number(q.id),question:q.q,options:q.a,answer_a:q.a[0]||"",answer_b:q.a[1]||"",answer_c:q.a[2]||"",answer_d:"",correct_answer:Number(q.correct),correct:Number(q.correct),image_url:q.imageUrl&&/^https?:/.test(q.imageUrl)?q.imageUrl:null}));
+ const missing=LOCAL_QUESTIONS.filter(q=>!existingIds.has(String(q.id))).map(q=>({id:Number(q.id),question:q.q,options:q.a,correct:Number(q.correct)}));
  if(!missing.length){status("هەموو پرسیارە ناوخۆییەکان پێشتر لە Supabase هەن.",true);return true}
  const ins=await sb.from("questions").insert(missing);
  if(ins.error){status("زیادکردنی پرسیارە کۆنەکان سەرکەوتوو نەبوو: "+ins.error.message,false);return false}
@@ -393,8 +393,14 @@ async function saveQuestion(){
    const up=await sb.storage.from("question-images").upload(path,file,{upsert:false});if(up.error)throw up.error;
    imageUrl=sb.storage.from("question-images").getPublicUrl(path).data.publicUrl
   }
-  const row={question:q,options:a,answer_a:a[0],answer_b:a[1],answer_c:a[2],answer_d:"",correct_answer:correct,correct:correct,image_url:imageUrl||null};
+  let row={question:q,options:a,correct:correct};
+  if(imageUrl)row.image_url=imageUrl;
   let res;if(editing)res=await sb.from("questions").update(row).eq("id",editing);else{row.id=Date.now();res=await sb.from("questions").insert(row)}
+  // ئەگەر image_url لە schema ـی Supabase نەبوو، دووبارە بە schema ـی سادە هەوڵ بدە.
+  if(res.error && /image_url|column.*schema cache/i.test(res.error.message||"")){
+   row={question:q,options:a,correct:correct};
+   if(editing)res=await sb.from("questions").update(row).eq("id",editing);else{row.id=Date.now();res=await sb.from("questions").insert(row)}
+  }
   if(res.error)throw res.error;
   const id=editing||row.id,obj={id,q,a,correct,imageUrl},idx=questions.findIndex(x=>String(x.id)===String(id));
   if(idx>=0)questions[idx]=obj;else questions.push(obj);
