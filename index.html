@@ -349,14 +349,15 @@ function normalizeOptions(x){
 
 async function loadRemote(){
  if(remoteQuestionsLoaded)return true;
- questions=LOCAL_QUESTIONS.map(q=>({...q,a:Array.isArray(q.a)?[...q.a]:[]}));
+ const deletedIds=getDeletedQuestionIds();
+ questions=LOCAL_QUESTIONS.filter(q=>!deletedIds.has(String(q.id))).map(q=>({...q,a:Array.isArray(q.a)?[...q.a]:[]}));
  // هەموو backup ـەکانی پرسیارەکانی Admin لە localStorage پارێزراون؛ هیچ کات overwrite ناکرێن بە []
  let cachedAdmin=[];
  try{
   const cached=JSON.parse(localStorage.getItem("drivingQuizAdminQuestions")||"[]");
   if(Array.isArray(cached)){
    cachedAdmin=cached.filter(q=>q&&q.id&&q.q&&Array.isArray(q.a)&&q.a.length>=3).map(q=>({...q,correct:Number(q.correct)||0}));
-   cachedAdmin.forEach(q=>questions.push(q));
+   cachedAdmin.filter(q=>!deletedIds.has(String(q.id))).forEach(q=>questions.push(q));
   }
  }catch(e){console.log("localStorage backup error:",e)}
  if(!await initSB()){
@@ -375,10 +376,10 @@ async function loadRemote(){
   a:normalizeOptions(x),
   correct:Number(x.correct_answer??x.correct??0),
   imageUrl:x.image_url||x.imageUrl||""
- })).filter(x=>x.q&&Array.isArray(x.a)&&x.a.length>=3);
+ })).filter(x=>!deletedIds.has(String(x.id))&&x.q&&Array.isArray(x.a)&&x.a.length>=3);
  const merged=new Map();
- LOCAL_QUESTIONS.forEach(q=>merged.set(String(q.id),{...q,a:Array.isArray(q.a)?[...q.a]:[]}));
- cachedAdmin.forEach(q=>merged.set(String(q.id),q));
+ LOCAL_QUESTIONS.filter(q=>!deletedIds.has(String(q.id))).forEach(q=>merged.set(String(q.id),{...q,a:Array.isArray(q.a)?[...q.a]:[]}));
+ cachedAdmin.filter(q=>!deletedIds.has(String(q.id))).forEach(q=>merged.set(String(q.id),q));
  remote.forEach(q=>{
   const key=String(q.id);
   const old=merged.get(key);
@@ -487,13 +488,25 @@ async function recoverLegacyAdminQuestions(){
  return recover.length;
 }
 
+function getDeletedQuestionIds(){
+ try{const a=JSON.parse(localStorage.getItem("drivingQuizDeletedQuestionIds")||"[]");return new Set(Array.isArray(a)?a.map(String):[])}catch(e){return new Set()}
+}
+function markQuestionDeleted(id){
+ try{
+  const s=getDeletedQuestionIds();s.add(String(id));
+  localStorage.setItem("drivingQuizDeletedQuestionIds",JSON.stringify(Array.from(s)));
+ }catch(e){console.warn("Delete backup failed",e)}
+}
+
 async function seedOldQuestions(){
  if(!await initSB())return false;
+ const deleted=getDeletedQuestionIds();
  const existingRes=await sb.from("questions").select("id");
  if(existingRes.error){status("نەتوانرا پرسیارەکانی Supabase بخوێندرێنەوە: "+existingRes.error.message,false);return false}
  const existingIds=new Set((existingRes.data||[]).map(x=>String(x.id)));
- const missing=LOCAL_QUESTIONS.filter(q=>!existingIds.has(String(q.id))).map(q=>({id:Number(q.id),question:q.q,options:q.a,correct_answer:Number(q.correct)}));
- if(!missing.length){status("هەموو پرسیارە ناوخۆییەکان پێشتر لە Supabase هەن.",true);return true}
+ // پرسیارێکی سڕاوە نابێت دووبارە لە 1-85 ـی ناوخۆییەوە دروست بکرێت.
+ const missing=LOCAL_QUESTIONS.filter(q=>!existingIds.has(String(q.id))&&!deleted.has(String(q.id))).map(q=>({id:Number(q.id),question:q.q,options:q.a,correct_answer:Number(q.correct)}));
+ if(!missing.length){status("هەموو پرسیارە ناوخۆییەکان پێشتر لە Supabase هەن یان بە دەستی سڕاونەتەوە.",true);return true}
  const ins=await sb.from("questions").insert(missing);
  if(ins.error){status("زیادکردنی پرسیارە کۆنەکان سەرکەوتوو نەبوو: "+ins.error.message,false);return false}
  status(`${missing.length} پرسیاری نوێ بۆ Supabase زیاد کرا.`,true);return true
@@ -568,7 +581,13 @@ function editQuestion(id){
 async function deleteQuestion(id){
  if(!adminLoggedIn||!await initSB())return;if(!confirm("دڵنیایت لە سڕینەوەی ئەم پرسیارە؟"))return;
  const r=await sb.from("questions").delete().eq("id",id);if(r.error){status("سڕینەوە سەرکەوتوو نەبوو: "+r.error.message,false);return}
- questions=questions.filter(q=>String(q.id)!==String(id));remoteQuestionsLoaded=true;saveQuestionsBackup();renderAdmin();status("پرسیارەکە بە سەرکەوتوویی سڕایەوە. لە Refresh ـیشدا ناگەڕێتەوە.",true)
+ // تۆمارکردنی سڕینەوە لە مۆبایل، بۆ ئەوەی لە Refresh/Login یان reset ـی Database ـیش دووبارە نەگەڕێتەوە.
+ markQuestionDeleted(id);
+ questions=questions.filter(q=>String(q.id)!==String(id));
+ remoteQuestionsLoaded=true;
+ saveQuestionsBackup();
+ renderAdmin();
+ status("پرسیارەکە بە سەرکەوتوویی سڕایەوە و نیشانەی سڕینەوەی بۆ Backup خەزن کرا؛ دووبارە ناگەڕێتەوە.",true)
 }
 function renderAdmin(){
  const box=$("adminList"),list=questions.filter(q=>q&&Number(q.id)>0);
