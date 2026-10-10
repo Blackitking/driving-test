@@ -349,7 +349,7 @@ function normalizeOptions(x){
 
 async function loadRemote(){
  if(remoteQuestionsLoaded)return true;
- const deletedIds=getDeletedQuestionIds();
+ const deletedIds=await getGlobalDeletedQuestionIds();
  questions=LOCAL_QUESTIONS.filter(q=>!deletedIds.has(String(q.id))).map(q=>({...q,a:Array.isArray(q.a)?[...q.a]:[]}));
  // هەموو backup ـەکانی پرسیارەکانی Admin لە localStorage پارێزراون؛ هیچ کات overwrite ناکرێن بە []
  let cachedAdmin=[];
@@ -497,10 +497,33 @@ function markQuestionDeleted(id){
   localStorage.setItem("drivingQuizDeletedQuestionIds",JSON.stringify(Array.from(s)));
  }catch(e){console.warn("Delete backup failed",e)}
 }
+async function getGlobalDeletedQuestionIds(){
+ const local=getDeletedQuestionIds();
+ try{
+  if(!await initSB())return local;
+  const r=await sb.from("question_deletions").select("question_id");
+  if(r.error){
+   console.warn("Global deletion list unavailable:",r.error.message);
+   return local;
+  }
+  (r.data||[]).forEach(x=>{if(x&&x.question_id!==null&&x.question_id!==undefined)local.add(String(x.question_id))});
+  try{localStorage.setItem("drivingQuizDeletedQuestionIds",JSON.stringify(Array.from(local)))}catch(e){}
+  return local;
+ }catch(e){
+  console.warn("Global deletion load failed",e);
+  return local;
+ }
+}
+async function saveGlobalDeletion(id){
+ if(!await initSB())throw new Error("Supabase ڕێک نەخراوە.");
+ const r=await sb.from("question_deletions").upsert({question_id:Number(id)},{onConflict:"question_id"});
+ if(r.error)throw r.error;
+ markQuestionDeleted(id);
+}
 
 async function seedOldQuestions(){
  if(!await initSB())return false;
- const deleted=getDeletedQuestionIds();
+ const deleted=await getGlobalDeletedQuestionIds();
  const existingRes=await sb.from("questions").select("id");
  if(existingRes.error){status("نەتوانرا پرسیارەکانی Supabase بخوێندرێنەوە: "+existingRes.error.message,false);return false}
  const existingIds=new Set((existingRes.data||[]).map(x=>String(x.id)));
@@ -580,14 +603,19 @@ function editQuestion(id){
 }
 async function deleteQuestion(id){
  if(!adminLoggedIn||!await initSB())return;if(!confirm("دڵنیایت لە سڕینەوەی ئەم پرسیارە؟"))return;
- const r=await sb.from("questions").delete().eq("id",id);if(r.error){status("سڕینەوە سەرکەوتوو نەبوو: "+r.error.message,false);return}
- // تۆمارکردنی سڕینەوە لە مۆبایل، بۆ ئەوەی لە Refresh/Login یان reset ـی Database ـیش دووبارە نەگەڕێتەوە.
- markQuestionDeleted(id);
- questions=questions.filter(q=>String(q.id)!==String(id));
- remoteQuestionsLoaded=true;
- saveQuestionsBackup();
- renderAdmin();
- status("پرسیارەکە بە سەرکەوتوویی سڕایەوە و نیشانەی سڕینەوەی بۆ Backup خەزن کرا؛ دووبارە ناگەڕێتەوە.",true)
+ try{
+  // یەکەم نیشانەی سڕینەوە لە Supabase تۆمار دەکەین، بۆ ئەوەی بۆ هەموو بەکارهێنەران global بێت.
+  await saveGlobalDeletion(id);
+  const r=await sb.from("questions").delete().eq("id",id);
+  if(r.error)throw r.error;
+  questions=questions.filter(q=>String(q.id)!==String(id));
+  remoteQuestionsLoaded=true;
+  saveQuestionsBackup();
+  renderAdmin();
+  status("پرسیارەکە سڕایەوە؛ لە هەموو کەسێکدا دووبارە نایەتەوە. ✅",true);
+ }catch(e){
+  status("سڕینەوە سەرکەوتوو نەبوو: "+(e.message||e),false);
+ }
 }
 function renderAdmin(){
  const box=$("adminList"),list=questions.filter(q=>q&&Number(q.id)>0);
